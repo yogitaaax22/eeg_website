@@ -12,9 +12,12 @@ import google.generativeai as genai
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
-API_KEY = "AIzaSyDj2KlimOkPyFXMFCTden3mbfXPwCowyz0".strip()
-genai.configure(api_key=API_KEY)
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if API_KEY:
+    genai.configure(api_key=API_KEY)
+else:
+    print("Warning: GOOGLE_API_KEY not found in environment variables.")
 
 def extract_features(eeg_data):
     """Simplified feature extraction for demo purposes."""
