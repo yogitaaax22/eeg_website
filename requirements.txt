@@ -1,0 +1,10 @@
+Flask
+numpy
+scipy
+matplotlib
+gunicorn
+google-generativeai
+pandas
+scikit-learn
+gunicorn
+

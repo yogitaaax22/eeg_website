@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EEG Stress Detector</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f8f9fa; }
+    .stress-level { font-weight: bold; padding: 5px 12px; border-radius: 5px; color: white; font-size: 0.9rem; }
+    .relax { background-color: #2e7d32; }
+    .low-stress { background-color: #9ccc65; color: black; }
+    .moderate-stress { background-color: #ffa726; }
+    .high-stress { background-color: #ef5350; }
+    .gemini-insight { background-color: #ffffff; border-left: 5px solid #4285f4; padding: 25px; border-radius: 5px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <div class="container mt-5">
+    <h1 class="mb-4 text-center" style="font-size: 2.3rem; font-weight: 600; color: #2c3e50;">
+    Clinical EEG Stress Detection Dashboard
+</h1>
+
+    <div class="card mb-4 shadow-sm">
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data">
+          <label class="form-label">Upload EEG .mat Files</label>
+          <input type="file" name="mat_files" multiple class="form-control mb-3" required>
+          <button type="submit" class="btn btn-primary w-100">Predict Stress</button>
+        </form>
+      </div>
+    </div>
+
+    {% if results %}
+    <div class="card mb-4 shadow-sm">
+      <div class="card-body">
+        <h3 class="card-title mb-3">Predicted Stress Levels</h3>
+        <ul class="list-group mb-4">
+          {% for file_name, level in results %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <strong>{{ file_name }}</strong>
+            <span class="stress-level {{ level.lower().replace(' ', '-') }}">{{ level }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+
+        <h5 class="text-center">Stress Distribution Overview</h5>
+        <div class="text-center mb-5">
+            <img src="{{ url_for('static', filename='plot.png') }}" class="img-fluid rounded shadow-sm">
+        </div>
+
+        <div class="row align-items-center">
+            <div class="col-md-5 text-center">
+                <h6>Neural Band Power</h6>
+                <img src="{{ url_for('static', filename='clinical_plot.png') }}" class="img-fluid rounded shadow-sm">
+            </div>
+            <div class="col-md-7">
+                <div class="gemini-insight">
+                    <h6 style="color:#4285f4"><b>Clinical Analysis Insight (Powered by Gemini AI)</b></h6>
+                    <hr>
+                    <div style="font-size: 1rem; line-height: 1.6; color: #333;">
+                        {{ clinical_note|safe }}
+                    </div>
+                </div>
+            </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    <footer class="text-center mt-5 mb-4 text-muted">
+    <small>
+        &copy; 2025 Clinical EEG Dashboard <br>
+        <span style="font-size: 0.8rem;">
+            Developed via <b>Google Colab</b> & <b>Python</b> | 
+            AI Processing by <b>Google Gemini</b> | 
+            Framework: <b>Flask</b>
+        </span>
+    </small>
+</footer>
+  </div>
+</body>
+</html>
