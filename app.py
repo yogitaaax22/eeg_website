@@ -1,10 +1,9 @@
 import os
 import numpy as np
-# --- CRUCIAL MAC FIX ---
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-# -----------------------
+
 from flask import Flask, render_template, request
 from scipy.io import loadmat
 from collections import Counter
