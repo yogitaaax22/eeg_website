@@ -1,10 +1,9 @@
-Flask
+flask
 numpy
 scipy
 matplotlib
-gunicorn
-google-generativeai
 pandas
 scikit-learn
+xgboost
+google-generativeai
 gunicorn
-
