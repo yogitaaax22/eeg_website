@@ -1,36 +1,65 @@
 import os
 import numpy as np
+import pickle
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg') # Necessary for cloud servers without a monitor
 import matplotlib.pyplot as plt
 
 from flask import Flask, render_template, request
 from scipy.io import loadmat
+from scipy.signal import welch
+from scipy.stats import skew, kurtosis
+from scipy.stats.mstats import winsorize
 from collections import Counter
 import google.generativeai as genai
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("GOOGLE_API_KEY")
+# --- 1. LOAD YOUR 82% FILES ---
+# This looks for the model in the same folder as app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(BASE_DIR, 'stress_model.pkl')
 
+stress_model = None
+
+try:
+    if os.path.exists(model_path):
+        with open(model_path, 'rb') as f:
+            stress_model = pickle.load(f)
+        print("✅ SUCCESS: 82% Stress Model Loaded.")
+    else:
+        print(f"❌ ERROR: Model file not found at {model_path}")
+except Exception as e:
+    print(f"❌ ERROR LOADING MODEL: {e}")
+
+# Gemini API Configuration
+API_KEY = os.getenv("GOOGLE_API_KEY")
 if API_KEY:
     genai.configure(api_key=API_KEY)
-else:
-    print("Warning: GOOGLE_API_KEY not found in environment variables.")
 
-def extract_features(eeg_data):
-    """Simplified feature extraction for demo purposes."""
-    # Takes the mean power of the first 4 frequency bands
-    return np.mean(np.abs(eeg_data), axis=1)[:4]
+# --- 2. THE 82% FEATURE LOGIC ---
+def extract_features(eeg):
+    # Ensure data is oriented correctly
+    if eeg.shape[0] < eeg.shape[1]: eeg = eeg.T
+    
+    # Preprocessing: Winsorize & Normalize
+    eeg = winsorize(eeg, limits=[0.05, 0.05], axis=0)
+    eeg = (eeg - np.mean(eeg, axis=0)) / (np.std(eeg, axis=0) + 1e-6)
 
-def compute_stress_level(features):
-    """Logic to map EEG features to stress levels."""
-    alpha, beta = features[2], features[3]
-    ratio = alpha / (beta + 1e-6)
-    if ratio > 1.5: return "Relax"
-    elif ratio > 1.0: return "Low Stress"
-    elif ratio > 0.6: return "Moderate Stress"
-    else: return "High Stress"
+    def get_bands(sig):
+        freqs, psd = welch(sig, fs=128, nperseg=256)
+        low = np.mean(psd[(freqs >= 0.5) & (freqs <= 8)])
+        alpha = np.mean(psd[(freqs >= 8) & (freqs <= 13)])
+        beta = np.mean(psd[(freqs >= 13) & (freqs <= 30)])
+        total = low + alpha + beta + 1e-6
+        return [low/total, alpha/total, beta/total, skew(sig), kurtosis(sig)]
+
+    all_feats = np.array([get_bands(eeg[:, i]) for i in range(eeg.shape[1])])
+    
+    # 82% Strategy: Spatial Averaging (Front 16 vs Back 16)
+    front = all_feats[:16].mean(axis=0)
+    back = all_feats[16:].mean(axis=0)
+    return np.concatenate([front, back]).reshape(1, -1)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -40,73 +69,54 @@ def index():
     if request.method == "POST":
         uploaded_files = request.files.getlist("mat_files")
         if uploaded_files:
-            if not os.path.exists("static"): os.makedirs("static")
+            # Create static folder for plots if it doesn't exist
+            static_dir = os.path.join(BASE_DIR, "static")
+            if not os.path.exists(static_dir): 
+                os.makedirs(static_dir)
             
-            predicted_levels, filenames, all_powers = [], [], []
+            predicted_levels, filenames = [], []
 
             for file in uploaded_files:
-                file_path = os.path.join("static", file.filename)
+                file_path = os.path.join(static_dir, file.filename)
                 file.save(file_path)
                 filenames.append(file.filename)
                 
-                # Load EEG Data
                 try:
                     data = loadmat(file_path)
-                    eeg = data.get("Data", np.random.rand(4, 1000))
+                    eeg = data.get("Data")
+                    
+                    if stress_model is None:
+                        raise ValueError("Model not loaded.")
+
+                    # Predict
                     feats = extract_features(eeg)
-                    all_powers.append(feats)
-                    predicted_levels.append(compute_stress_level(feats))
+                    prob = stress_model.predict_proba(feats)[:, 1]
+                    state = "Stress" if prob > 0.60 else "Relax"
+                    predicted_levels.append(state)
+                    
                 except Exception as e:
-                    print(f"Error reading {file.filename}: {e}")
+                    print(f"Error processing {file.filename}: {e}")
 
             if predicted_levels:
                 counts = Counter(predicted_levels)
-                summary_stats = ", ".join([f"{k}: {v}" for k, v in counts.items()])
-                avg = np.mean(all_powers, axis=0)
                 main_state = counts.most_common(1)[0][0]
 
-                # --- CALL GEMINI 2.5 LITE ---
+                # --- GEMINI AI REPORT ---
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-flash-lite')
-                    prompt = (
-                    "Context: Senior Data Analyst report for an EEG session. "
-                    f"DATA: {summary_stats}. Alpha: {avg[2]:.4f}, Beta: {avg[3]:.4f}. "
-                    "TASK: Write exactly 2 paragraphs (5 lines each). "
-                    "Para 1 (Session Overview): Start by confirming the primary classification is "
-                    f"'{main_state}'. Group all sessional data here: mention the {summary_stats} "
-                    f"distribution and the specific Alpha ({avg[2]:.4f}) and Beta ({avg[3]:.4f}) "
-                    "amplitudes as the direct evidence for this session's outcome. "
-                    "Para 2 (Neural Analysis): Focus entirely on the 'observed oscillations'. "
-                    "Explain the relationship between the calmness of Alpha and the engagement "
-                    f"of Beta. Describe why this specific balance creates the '{main_state}' "
-                    "effect on the user's focus and clarity. Keep all technical theory here. "
-                    "STYLE: Highly organized, clean, and professional. No bolding. One <br> for spacing."
-                )
-                    response = model.generate_content(prompt)
+                    model_gen = genai.GenerativeModel('gemini-2.0-flash-lite')
+                    prompt = f"EEG Results: {dict(counts)}. Majority state: {main_state}. Provide a short report."
+                    response = model_gen.generate_content(prompt)
                     clinical_note = response.text.strip().replace("\n\n", "<br><br>")
-                except Exception as e:
-                    print(f"Gemini fallback active: {e}")
-                    clinical_note = (
-                        f"<b>System Analysis:</b> A dominant state of {main_state} was detected. "
-                        f"Distribution: {summary_stats}. <br><br><b>Neural Pattern:</b> "
-                        f"Alpha power ({avg[2]:.4f}) vs Beta ({avg[3]:.4f}) supports the classification."
-                    )
+                except:
+                    clinical_note = f"Analysis complete. Most trials showed: {main_state}."
 
-                # --- PLOTTING ---
-                # Stress Chart
-                plt.figure(figsize=(7, 5))
-                labels = ["Relax", "Low Stress", "Moderate Stress", "High Stress"]
-                pcts = [(counts.get(l, 0) / len(predicted_levels)) * 100 for l in labels]
-                plt.bar(labels, pcts, color=["#2e7d32","#9ccc65","#ffa726","#ef5350"])
-                plt.title("Stress Level Distribution (%)")
-                plt.savefig("static/plot.png")
-                plt.close()
-
-                # Band Power Chart
-                plt.figure(figsize=(5, 4))
-                plt.bar(["Delta", "Theta", "Alpha", "Beta"], avg, color=['#808080', '#D4AC0D', '#2E86C1', '#C0392B'])
-                plt.title("Average Band Power")
-                plt.savefig("static/clinical_plot.png")
+                # --- GENERATE PLOT ---
+                plt.figure(figsize=(6, 4))
+                plt.bar(counts.keys(), counts.values(), color=['#2e7d32', '#ef5350'])
+                plt.title("Session Stress Analysis")
+                plt.ylabel("Trial Count")
+                plot_path = os.path.join(static_dir, "plot.png")
+                plt.savefig(plot_path)
                 plt.close()
 
                 results = list(zip(filenames, predicted_levels))
@@ -114,4 +124,5 @@ def index():
     return render_template("index.html", results=results, clinical_note=clinical_note)
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Local run (for cloud, gunicorn will use app:app)
+    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
