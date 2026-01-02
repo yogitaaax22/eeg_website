@@ -1,16 +1,15 @@
-# app.py
 from flask import Flask, request, jsonify
 import numpy as np
 import os
 from model_pipeline import predict_from_raw
 
-# Gemini integration
-import openai
+# --- Gemini API setup (kept as in your original app.py) ---
+import openai  # assuming you use this for Gemini
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Add any other Gemini setup here if needed
 
-openai.api_key = "YOUR_GEMINI_API_KEY"  # <--- Keep this here
-
+# --- Flask App ---
 app = Flask(__name__)
-
 
 @app.route("/predict", methods=["POST"])
 def predict():
