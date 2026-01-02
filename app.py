@@ -1,6 +1,8 @@
 # app.py
 from flask import Flask, request, jsonify
 from model_pipeline import predict_from_raw
+import hashlib
+from scipy.io import loadmat
 
 # Gemini integration
 import openai
