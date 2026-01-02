@@ -1,3 +1,16 @@
+# app.py
+from flask import Flask, request, jsonify
+from model_pipeline import predict_from_raw
+import hashlib
+from scipy.io import loadmat
+
+# Gemini integration
+import openai
+
+openai.api_key = "YOUR_GEMINI_API_KEY"  # <--- Keep this here
+
+app = Flask(__name__)
+
 @app.route("/predict_verified", methods=["POST"])
 def predict_verified():
     if 'eeg_file' not in request.files:
