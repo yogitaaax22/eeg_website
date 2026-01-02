@@ -1,8 +1,8 @@
 # app.py
 from flask import Flask, request, jsonify
+import numpy as np
+import os
 from model_pipeline import predict_from_raw
-import hashlib
-from scipy.io import loadmat
 
 # Gemini integration
 import openai
@@ -11,33 +11,30 @@ openai.api_key = "YOUR_GEMINI_API_KEY"  # <--- Keep this here
 
 app = Flask(__name__)
 
-@app.route("/predict_verified", methods=["POST"])
-def predict_verified():
+@app.route("/predict", methods=["POST"])
+def predict():
     if 'eeg_file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files['eeg_file']
 
-    # Save uploaded file
-    saved_path = "/tmp/uploaded_eeg.mat"
+    # Save temporarily
+    saved_path = "/tmp/uploaded_eeg.npz"
     file.save(saved_path)
 
-    # Compute MD5 hash
-    import hashlib
-    with open(saved_path, "rb") as f:
-        file_hash = hashlib.md5(f.read()).hexdigest()
+    # Load EEG from .npz (stable format)
+    try:
+        eeg_data = np.load(saved_path)['data']
+    except Exception as e:
+        return jsonify({"error": f"Failed to load EEG: {str(e)}"}), 400
 
-    # Load EEG like Colab
-    from scipy.io import loadmat
-    mat_data = loadmat(saved_path)
-    eeg = mat_data['Data']
+    # Predict using model pipeline
+    try:
+        prediction = predict_from_raw(eeg_data)
+    except Exception as e:
+        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
 
-    # Predict
-    from model_pipeline import predict_from_raw
-    prediction = predict_from_raw(eeg)
+    return jsonify({"prediction": int(prediction)})
 
-    # Return both prediction and hash
-    return jsonify({
-        "prediction": int(prediction),
-        "file_hash": file_hash
-    })
+if __name__ == "__main__":
+    app.run(debug=True)
