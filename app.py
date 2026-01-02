@@ -117,9 +117,9 @@ def index():
                 avg = np.mean(all_powers, axis=0) # Index 2=Alpha, 3=Beta to match your chart/Gemini
                 main_state = counts.most_common(1)[0][0]
 
-                # --- YOUR ORIGINAL GEMINI 2.5 LITE LOGIC ---
+                
                 try:
-                    model_ai = genai.GenerativeModel('gemini-1.5-flash-lite')
+                    model_ai = genai.GenerativeModel('gemini-2.5-flash-lite')
                     prompt = (
                         "Context: Senior Data Analyst report for an EEG session. "
                         f"DATA: {summary_stats}. Alpha: {avg[2]:.4f}, Beta: {avg[3]:.4f}. "
@@ -140,7 +140,7 @@ def index():
                     print(f"Gemini error: {e}")
                     clinical_note = f"Analysis complete. Majority state: {main_state}."
 
-                # --- YOUR ORIGINAL PLOTTING ---
+                
                 plt.figure(figsize=(7, 5))
                 labels = ["Relax", "Low Stress", "Moderate Stress", "High Stress"]
                 pcts = [(counts.get(l, 0) / len(predicted_levels)) * 100 for l in labels]
