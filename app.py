@@ -35,7 +35,7 @@ def extract_features(eeg):
     if eeg.shape[0] < eeg.shape[1]: eeg = eeg.T
     
     # 1. Winsorization (The noise-cleaning step from Colab)
-    eeg = winsorize(eeg, limits=[0.05, 0.05], axis=0)
+    eeg = winsorize(eeg, limits=[0.01, 0.01], axis=0)
     
     # 2. Z-Score Normalization
     eeg = (eeg - np.mean(eeg, axis=0)) / (np.std(eeg, axis=0) + 1e-6)
