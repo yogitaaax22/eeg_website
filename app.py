@@ -16,35 +16,22 @@ def predict_verified():
 
     file = request.files['eeg_file']
 
-    # 1️⃣ Save uploaded file exactly as-is
+    # Save uploaded file temporarily
     saved_path = "/tmp/uploaded_eeg.mat"
     file.save(saved_path)
 
-    # 2️⃣ Compute hash for verification
+    # Compute MD5 hash to check
     with open(saved_path, "rb") as f:
-        file_bytes = f.read()
-        file_hash = hashlib.md5(file_bytes).hexdigest()
+        file_hash = hashlib.md5(f.read()).hexdigest()
+    print("Uploaded file hash:", file_hash)
 
-    print("Uploaded file MD5 hash:", file_hash)
-
-    # 3️⃣ Load EEG exactly like Colab
+    # Load EEG like Colab
     mat_data = loadmat(saved_path)
-    if 'Data' not in mat_data:
-        return jsonify({"error": "Invalid .mat file"}), 400
-
     eeg = mat_data['Data']
 
-    # 4️⃣ Preprocess and predict exactly like Colab
-    features = preprocess_eeg(eeg)
     prediction = predict_from_raw(eeg)
-
-    print("Prediction (0=Relax,1=Stress):", prediction)
 
     return jsonify({
         "prediction": int(prediction),
         "file_hash": file_hash
     })
-
-if __name__ == "__main__":
-    app.run(debug=True)
-
