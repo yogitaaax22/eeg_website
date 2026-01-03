@@ -69,10 +69,10 @@ def extract_features(eeg):
 def compute_stress_level(model_in):
     if stress_model is None: return "Model Error"
     prob = stress_model.predict_proba(model_in)[:, 1][0]
-    # YOUR GOLDEN 0.6 THRESHOLD
-    if prob > 0.6: return "High Stress"
-    elif prob > 0.4: return "Moderate Stress"
-    elif prob > 0.2: return "Low Stress"
+    
+    if prob > 0.8: return "High Stress"
+    elif prob > 0.6: return "Moderate Stress"
+    elif prob > 0.4: return "Low Stress"
     else: return "Relax"
 
 @app.route("/", methods=["GET", "POST"])
@@ -110,7 +110,7 @@ def index():
                 avg = np.mean(all_powers, axis=0)
                 main_state = counts.most_common(1)[0][0]
 
-                # --- CALL GEMINI 2.5 LITE (EXACTLY AS YOU HAD IT) ---
+                # --- CALL GEMINI 2.5 LITE  ---
                 try:
                     model = genai.GenerativeModel('gemini-2.5-flash-lite')
                     prompt = (
