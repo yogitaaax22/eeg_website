@@ -47,58 +47,49 @@ except:
 # --- 4. THE ROUTE ---
 @app.route("/", methods=["GET", "POST"])
 def index():
-    results = []      # List of (filename, status)
+    results = []
     clinical_note = ""
     error = None
 
     if request.method == "POST":
-        # Match your HTML: name="mat_files"
-        uploaded_files = request.files.getlist("mat_files")
+        files = request.files.getlist("mat_files")
         
-        if not uploaded_files or uploaded_files[0].filename == '':
-            error = "No file selected. Please choose a .mat file."
-            return render_template("index.html", results=results, error=error)
+        if not files or files[0].filename == '':
+            return render_template("index.html", error="No file selected.")
 
         try:
-            last_status = "Relaxed"
-            for file in uploaded_files:
+            for file in files:
                 data_dict = loadmat(file)
-                # Flexible key check
-                eeg = data_dict.get("Data") or data_dict.get("data") or data_dict.get("val")
-                del data_dict
+                # This line finds out what the file actually contains
+                all_keys = [k for k in data_dict.keys() if not k.startswith('_')]
+                
+                # Try every common key name
+                eeg = data_dict.get("Data") or data_dict.get("data") or data_dict.get("val") or data_dict.get("EEG")
                 
                 if eeg is not None:
-                    features = extract_features_final(eeg)
-                    if features is not None and stress_model:
-                        prob = float(stress_model.predict_proba(features)[0][1])
-                        # Person 12 Calibration (0.82)
-                        if prob > 0.96: status = "High Stress"
-                        elif prob > 0.82: status = "Moderate Stress"
-                        else: status = "Relaxed"
-                        
+                    model_in = extract_features_final(eeg)
+                    if stress_model:
+                        prob = float(stress_model.predict_proba(model_in)[0][1])
+                        # Use your 82% Accuracy Calibration
+                        status = "High Stress" if prob > 0.96 else "Moderate Stress" if prob > 0.82 else "Relaxed"
                         results.append((file.filename, status))
-                        last_status = status
                     else:
-                        error = "Model logic or file format mismatch."
+                        error = "Model file (stress_model.pkl) is missing from the server."
                 else:
-                    error = "Could not find 'Data' key in the .mat file."
+                    # THIS IS THE FIX: It tells you what is actually inside your file
+                    error = f"Could not find EEG data. Your file has these keys: {all_keys}. Update app.py to match."
                 
                 gc.collect()
 
-            # --- GEMINI AI ---
             if results:
+                # Gemini Tip
                 try:
-                    prompt = f"Patient EEG results: {last_status}. Provide 1 clinical health tip."
-                    clinical_note = gemini_model.generate_content(prompt).text
+                    res = gemini_model.generate_content(f"User is {results[0][1]}. 1-sentence health tip.")
+                    clinical_note = res.text
                 except:
-                    clinical_note = "Focus on deep breathing to stabilize neural activity."
+                    clinical_note = "Focus on deep breathing."
 
         except Exception as e:
-            error = f"System Error: {str(e)}"
+            error = f"System Crash: {str(e)}"
 
-    # Send EVERYTHING to the HTML
     return render_template("index.html", results=results, clinical_note=clinical_note, error=error)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
