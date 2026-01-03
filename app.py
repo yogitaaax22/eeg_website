@@ -70,9 +70,9 @@ def compute_stress_level(model_in):
     if stress_model is None: return "Model Error"
     prob = stress_model.predict_proba(model_in)[:, 1][0]
     
-    if prob > 0.8: return "High Stress"
-    elif prob > 0.6: return "Moderate Stress"
-    elif prob > 0.4: return "Low Stress"
+    if prob > 0.95: return "High Stress"
+    elif prob > 0.7: return "Moderate Stress"
+    elif prob > 0.5: return "Low Stress"
     else: return "Relax"
 
 @app.route("/", methods=["GET", "POST"])
