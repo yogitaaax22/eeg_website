@@ -1,160 +1,105 @@
-import os
+import os, gc
 import numpy as np
 import pickle
-import matplotlib
-matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-
 from flask import Flask, render_template, request
 from scipy.io import loadmat
 from scipy.signal import welch
-from scipy.stats import skew, kurtosis
-from scipy.stats.mstats import winsorize
-from collections import Counter
+from scipy.stats import skew, kurtosis, mstats
 import google.generativeai as genai
 
 app = Flask(__name__)
 
-# --- MODEL LOADING ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model_path = os.path.join(BASE_DIR, 'stress_model.pkl')
-stress_model = None
+# --- 1. CONFIGURATION ---
+# Using Gemini 2.0 Flash Lite as requested
+genai.configure(api_key="YOUR_GEMINI_API_KEY")
+gemini_model = genai.GenerativeModel('gemini-2.0-flash-lite-preview-02-05')
 
-try:
-    if os.path.exists(model_path):
-        with open(model_path, 'rb') as f:
-            stress_model = pickle.load(f)
-except Exception as e:
-    print(f"Model Load Error: {e}")
-
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
-else:
-    print("Warning: GOOGLE_API_KEY not found in environment variables.")
-
-# --- THE 82% LOGIC FUNCTIONS ---
-def extract_features(eeg):
+# --- 2. PRE-PROCESSING ENGINE (82% Accuracy Logic) ---
+def extract_features_final(eeg):
+    # Orientation check
     if eeg.shape[0] < eeg.shape[1]: eeg = eeg.T
     
-    # Noise cleaning & Normalization
-    eeg = winsorize(eeg, limits=[0.05, 0.05], axis=0)
+    # 5% Winsorization & Z-Score Normalization
+    eeg = mstats.winsorize(eeg, limits=[0.05, 0.05], axis=0)
     eeg = (eeg - np.mean(eeg, axis=0)) / (np.std(eeg, axis=0) + 1e-6)
-
-    def get_powers(sig):
-        freqs, psd = welch(sig, fs=128, nperseg=256)
-        # Power for the 4 VISUAL BANDS
-        d = np.mean(psd[(freqs >= 0.5) & (freqs <= 4)])
-        t = np.mean(psd[(freqs >= 4) & (freqs <= 8)])
-        a = np.mean(psd[(freqs >= 8) & (freqs <= 13)])
-        b = np.mean(psd[(freqs >= 13) & (freqs <= 30)])
-        total = d + t + a + b + 1e-6
-        return [d/total, t/total, a/total, b/total, skew(sig), kurtosis(sig)]
-
-    all_channel_feats = np.array([get_powers(eeg[:, i]) for i in range(eeg.shape[1])])
-    f_mean = all_channel_feats[:16].mean(axis=0)
-    b_mean = all_channel_feats[16:].mean(axis=0)
-
-    # For XGBoost (10 features: [Low, Alpha, Beta, Skew, Kurt] x 2)
-    model_in = np.concatenate([
-        [f_mean[0]+f_mean[1], f_mean[2], f_mean[3], f_mean[4], f_mean[5]],
-        [b_mean[0]+b_mean[1], b_mean[2], b_mean[3], b_mean[4], b_mean[5]]
-    ]).reshape(1, -1)
     
-    # For your Bar Chart (4 features)
-    vis_out = f_mean[:4] 
+    all_channel_features = []
+    for ch in range(eeg.shape[1]):
+        sig = eeg[:, ch]
+        # Welch PSD for Alpha, Beta, Low bands
+        f, psd = welch(sig, fs=128, nperseg=256)
+        low = np.mean(psd[(f >= 0.5) & (f <= 8)])
+        alpha = np.mean(psd[(f >= 8) & (f <= 13)])
+        beta = np.mean(psd[(f >= 13) & (f <= 30)])
+        total = low + alpha + beta + 1e-6
+        all_channel_features.append([low/total, alpha/total, beta/total, float(skew(sig)), float(kurtosis(sig))])
     
-    return model_in, vis_out
+    ch_feats = np.array(all_channel_features)
+    # Mean of first 16 (Frontal) and last 16 (Occipital)
+    front, back = ch_feats[:16].mean(axis=0), ch_feats[16:].mean(axis=0)
+    return np.concatenate([front, back]).reshape(1, -1)
 
-def compute_stress_level(model_in):
-    if stress_model is None: return "Model Error"
-    prob = stress_model.predict_proba(model_in)[:, 1][0]
-    
-    if prob > 0.95: return "High Stress"
-    elif prob > 0.7: return "Moderate Stress"
-    elif prob > 0.5: return "Low Stress"
-    else: return "Relax"
+# --- 3. LOAD YOUR PICKLE MODEL ---
+try:
+    with open('stress_model.pkl', 'rb') as f:
+        stress_model = pickle.load(f)
+except Exception as e:
+    stress_model = None
+    print(f"Model Load Error: {e}")
 
+# --- 4. FLASK ROUTES ---
 @app.route("/", methods=["GET", "POST"])
 def index():
     results = []
     clinical_note = ""
-    
+    error = None
+
     if request.method == "POST":
         uploaded_files = request.files.getlist("mat_files")
-        if uploaded_files:
-            if not os.path.exists("static"): os.makedirs("static")
-            
-            predicted_levels, filenames, all_powers = [], [], []
+        
+        if not uploaded_files or uploaded_files[0].filename == '':
+            return render_template("index.html", error="No file selected.")
 
+        try:
+            last_status = "Relaxed"
             for file in uploaded_files:
-                file_path = os.path.join("static", file.filename)
-                file.save(file_path)
-                filenames.append(file.filename)
+                # Direct load from file stream to save Render RAM
+                data_dict = loadmat(file)
+                eeg = data_dict.get("Data") or data_dict.get("data")
+                del data_dict # Immediate cleanup
                 
-                try:
-                    data = loadmat(file_path)
-                    eeg = data.get("Data", np.random.rand(32, 1000))
+                if eeg is not None:
+                    model_in = extract_features_final(eeg)
+                    del eeg # Immediate cleanup
                     
-                    # Call the accuracy engine
-                    m_in, v_out = extract_features(eeg)
-                    
-                    all_powers.append(v_out)
-                    predicted_levels.append(compute_stress_level(m_in))
-                except Exception as e:
-                    print(f"Error reading {file.filename}: {e}")
+                    if stress_model:
+                        # Probability from your XGBoost model
+                        prob = float(stress_model.predict_proba(model_in)[0][1])
+                        
+                        # Thresholds for Person 12 (0.82 calibration)
+                        if prob > 0.96: status = "High Stress"
+                        elif prob > 0.82: status = "Moderate Stress"
+                        else: status = "Relaxed"
+                        
+                        results.append((file.filename, status))
+                        last_status = status
+                
+                gc.collect() # Garbage collection for Render stability
 
-            if predicted_levels:
-                counts = Counter(predicted_levels)
-                summary_stats = ", ".join([f"{k}: {v}" for k, v in counts.items()])
-                avg = np.mean(all_powers, axis=0)
-                main_state = counts.most_common(1)[0][0]
-
-                # --- CALL GEMINI 2.5 LITE  ---
+            # --- GEMINI 2.0 FLASH LITE INSIGHT ---
+            if results:
+                prompt = f"Patient EEG results show {last_status}. Provide a 1-sentence medical wellness tip."
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-flash-lite')
-                    prompt = (
-                        "Context: Senior Data Analyst report for an EEG session. "
-                        f"DATA: {summary_stats}. Alpha: {avg[2]:.4f}, Beta: {avg[3]:.4f}. "
-                        "TASK: Write exactly 2 paragraphs (5 lines each). "
-                        "Para 1 (Session Overview): Start by confirming the primary classification is "
-                        f"'{main_state}'. Group all sessional data here: mention the {summary_stats} "
-                        f"distribution and the specific Alpha ({avg[2]:.4f}) and Beta ({avg[3]:.4f}) "
-                        "amplitudes as the direct evidence for this session's outcome. "
-                        "Para 2 (Neural Analysis): Focus entirely on the 'observed oscillations'. "
-                        "Explain the relationship between the calmness of Alpha and the engagement "
-                        f"of Beta. Describe why this specific balance creates the '{main_state}' "
-                        "effect on the user's focus and clarity. Keep all technical theory here. "
-                        "STYLE: Highly organized, clean, and professional. No bolding. One <br> for spacing."
-                    )
-                    response = model.generate_content(prompt)
-                    clinical_note = response.text.strip().replace("\n\n", "<br><br>")
-                except Exception as e:
-                    print(f"Gemini fallback active: {e}")
-                    clinical_note = (
-                        f"<b>System Analysis:</b> A dominant state of {main_state} was detected. "
-                        f"Distribution: {summary_stats}. <br><br><b>Neural Pattern:</b> "
-                        f"Alpha power ({avg[2]:.4f}) vs Beta ({avg[3]:.4f}) supports the classification."
-                    )
+                    response = gemini_model.generate_content(prompt)
+                    clinical_note = response.text
+                except:
+                    clinical_note = "Focus on deep, rhythmic breathing to lower neural stress markers."
 
-                # --- PLOTTING ---
-                plt.figure(figsize=(7, 5))
-                labels = ["Relax", "Low Stress", "Moderate Stress", "High Stress"]
-                pcts = [(counts.get(l, 0) / len(predicted_levels)) * 100 for l in labels]
-                plt.bar(labels, pcts, color=["#2e7d32","#9ccc65","#ffa726","#ef5350"])
-                plt.title("Stress Level Distribution (%)")
-                plt.savefig("static/plot.png")
-                plt.close()
+        except Exception as e:
+            error = f"Processing Error: {str(e)}"
 
-                plt.figure(figsize=(5, 4))
-                plt.bar(["Delta", "Theta", "Alpha", "Beta"], avg, color=['#808080', '#D4AC0D', '#2E86C1', '#C0392B'])
-                plt.title("Average Band Power")
-                plt.savefig("static/clinical_plot.png")
-                plt.close()
-
-                results = list(zip(filenames, predicted_levels))
-            
-    return render_template("index.html", results=results, clinical_note=clinical_note)
+    return render_template("index.html", results=results, clinical_note=clinical_note, error=error)
 
 if __name__ == "__main__":
-    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
